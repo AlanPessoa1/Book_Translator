@@ -1,0 +1,931 @@
+# Projeto Completo: Tradutor Concorrente de Livros em Java
+
+Vou te dar a estrutura **completa e detalhada** para o terminal. É mais simples do que parece!
+
+## 📁 Estrutura do Projeto
+
+```
+TraducaoConcorrente/
+│
+├── src/
+│   ├── Main.java
+│   ├── modelo/
+│   │   ├── Dicionario.java
+│   │   ├── BlocoTexto.java
+│   │   └── EstatisticasTraducao.java
+│   │
+│   ├── controle/
+│   │   ├── GerenciadorTraducao.java
+│   │   └── MonitorProgresso.java
+│   │
+│   ├── tarefa/
+│   │   └── TarefaTraducao.java
+│   │
+│   └── util/
+│       ├── LeitorArquivo.java
+│       └── Config.java
+│
+├── recursos/
+│   ├── dicionario.txt
+│   └── livro_entrada.txt
+│
+└── saida/
+    └── livro_traduzido.txt
+```
+
+## 📋 Classes Necessárias (Total: 9 classes)
+
+---
+
+## 1️⃣ **Config.java** - Configurações Globais
+
+```java
+package util;
+
+public class Config {
+    // ===== CONFIGURAÇÕES DE CONCORRÊNCIA =====
+    public static final int NUM_THREADS = 4;
+    public static final int PERMISSOES_DICIONARIO = 2;
+    
+    // ===== CONFIGURAÇÕES DE ARQUIVOS =====
+    public static final String CAMINHO_DICIONARIO = "recursos/dicionario.txt";
+    public static final String CAMINHO_LIVRO_ENTRADA = "recursos/livro_entrada.txt";
+    public static final String CAMINHO_LIVRO_SAIDA = "saida/livro_traduzido.txt";
+    
+    // ===== CONFIGURAÇÕES DE EXIBIÇÃO =====
+    public static final boolean EXIBIR_PROGRESSO_DETALHADO = true;
+    public static final int INTERVALO_ATUALIZACAO_MS = 500; // Atualiza a cada 500ms
+    
+    // ===== CONFIGURAÇÕES DE SIMULAÇÃO =====
+    public static final int DELAY_TRADUCAO_MS = 50; // Simula tempo de processamento
+}
+```
+
+---
+
+## 2️⃣ **Dicionario.java** - Recurso Compartilhado Principal
+
+```java
+package modelo;
+
+import util.Config;
+import java.io.BufferedReader;
+import java.io.FileReader;
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicInteger;
+
+public class Dicionario {
+    private Map<String, String> palavras;
+    private Semaphore semaforo;
+    private AtomicInteger totalAcessos;
+    private AtomicInteger totalEsperas;
+    
+    public Dicionario(int numPermissoes) {
+        this.palavras = new HashMap<>();
+        this.semaforo = new Semaphore(numPermissoes, true); // true = justo (evita starvation)
+        this.totalAcessos = new AtomicInteger(0);
+        this.totalEsperas = new AtomicInteger(0);
+        carregarDicionario();
+    }
+    
+    private void carregarDicionario() {
+        try (BufferedReader br = new BufferedReader(
+                new FileReader(Config.CAMINHO_DICIONARIO))) {
+            
+            String linha;
+            int contador = 0;
+            
+            while ((linha = br.readLine()) != null) {
+                linha = linha.trim();
+                if (linha.isEmpty() || linha.startsWith("#")) {
+                    continue; // Ignora linhas vazias e comentários
+                }
+                
+                String[] partes = linha.split(";");
+                if (partes.length == 2) {
+                    String palavraPt = partes[0].trim().toLowerCase();
+                    String palavraEn = partes[1].trim().toLowerCase();
+                    palavras.put(palavraPt, palavraEn);
+                    contador++;
+                }
+            }
+            
+            System.out.println("[DICIONÁRIO] Carregado com " + contador + " palavras");
+            
+        } catch (IOException e) {
+            System.err.println("[ERRO] Não foi possível carregar o dicionário: " + e.getMessage());
+            System.err.println("[INFO] Criando dicionário básico...");
+            carregarDicionarioBasico();
+        }
+    }
+    
+    private void carregarDicionarioBasico() {
+        // Dicionário mínimo caso o arquivo não exista
+        palavras.put("o", "the");
+        palavras.put("a", "the");
+        palavras.put("um", "a");
+        palavras.put("uma", "a");
+        palavras.put("e", "and");
+        palavras.put("de", "of");
+        palavras.put("em", "in");
+        palavras.put("para", "to");
+        palavras.put("que", "that");
+        palavras.put("com", "with");
+        palavras.put("cachorro", "dog");
+        palavras.put("gato", "cat");
+        palavras.put("casa", "house");
+        palavras.put("livro", "book");
+        palavras.put("era", "was");
+        palavras.put("vez", "time");
+        palavras.put("tinha", "had");
+        palavras.put("morava", "lived");
+        palavras.put("grande", "big");
+        palavras.put("feliz", "happy");
+        
+        System.out.println("[DICIONÁRIO] Dicionário básico criado com " + palavras.size() + " palavras");
+    }
+    
+    public String traduzir(String palavra, int threadId) throws InterruptedException {
+        boolean precisouEsperar = false;
+        
+        // Tenta adquirir permissão
+        if (!semaforo.tryAcquire()) {
+            precisouEsperar = true;
+            totalEsperas.incrementAndGet();
+            
+            if (Config.EXIBIR_PROGRESSO_DETALHADO) {
+                System.out.println("  [Thread " + threadId + "] ⏳ Aguardando acesso ao dicionário...");
+            }
+            
+            semaforo.acquire(); // Bloqueia até conseguir
+        }
+        
+        try {
+            totalAcessos.incrementAndGet();
+            
+            if (Config.EXIBIR_PROGRESSO_DETALHADO && precisouEsperar) {
+                System.out.println("  [Thread " + threadId + "] ✓ Conseguiu acesso ao dicionário");
+            }
+            
+            // Simula tempo de busca no dicionário
+            Thread.sleep(Config.DELAY_TRADUCAO_MS);
+            
+            // Traduz ou mantém original entre colchetes
+            String palavraLimpa = limparPalavra(palavra);
+            String traducao = palavras.getOrDefault(palavraLimpa.toLowerCase(), "[" + palavraLimpa + "]");
+            
+            return traducao;
+            
+        } finally {
+            semaforo.release();
+        }
+    }
+    
+    private String limparPalavra(String palavra) {
+        // Remove pontuação mas mantém a palavra
+        return palavra.replaceAll("[.,;:!?\"']", "");
+    }
+    
+    public int getTotalAcessos() {
+        return totalAcessos.get();
+    }
+    
+    public int getTotalEsperas() {
+        return totalEsperas.get();
+    }
+    
+    public int getTamanhoDicionario() {
+        return palavras.size();
+    }
+}
+```
+
+---
+
+## 3️⃣ **BlocoTexto.java** - Representa um pedaço do livro
+
+```java
+package modelo;
+
+import java.util.List;
+
+public class BlocoTexto {
+    private int indice;
+    private List<String> palavras;
+    private int posicaoInicial; // Posição no texto original
+    
+    public BlocoTexto(int indice, List<String> palavras, int posicaoInicial) {
+        this.indice = indice;
+        this.palavras = palavras;
+        this.posicaoInicial = posicaoInicial;
+    }
+    
+    public int getIndice() {
+        return indice;
+    }
+    
+    public List<String> getPalavras() {
+        return palavras;
+    }
+    
+    public int getPosicaoInicial() {
+        return posicaoInicial;
+    }
+    
+    public int getTamanho() {
+        return palavras.size();
+    }
+    
+    @Override
+    public String toString() {
+        return "Bloco " + indice + " [" + palavras.size() + " palavras]";
+    }
+}
+```
+
+---
+
+## 4️⃣ **EstatisticasTraducao.java** - Métricas do processo
+
+```java
+package modelo;
+
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+
+public class EstatisticasTraducao {
+    private AtomicInteger palavrasTraduzidas;
+    private AtomicLong tempoTotalMs;
+    private int totalPalavras;
+    private long tempoInicio;
+    
+    public EstatisticasTraducao(int totalPalavras) {
+        this.palavrasTraduzidas = new AtomicInteger(0);
+        this.tempoTotalMs = new AtomicLong(0);
+        this.totalPalavras = totalPalavras;
+        this.tempoInicio = System.currentTimeMillis();
+    }
+    
+    public void incrementarPalavrasTraduzidas() {
+        palavrasTraduzidas.incrementAndGet();
+    }
+    
+    public void finalizarContagem() {
+        long tempoFim = System.currentTimeMillis();
+        tempoTotalMs.set(tempoFim - tempoInicio);
+    }
+    
+    public int getPalavrasTraduzidas() {
+        return palavrasTraduzidas.get();
+    }
+    
+    public int getTotalPalavras() {
+        return totalPalavras;
+    }
+    
+    public long getTempoTotalMs() {
+        return tempoTotalMs.get();
+    }
+    
+    public double getTempoTotalSegundos() {
+        return tempoTotalMs.get() / 1000.0;
+    }
+    
+    public int getPercentualCompleto() {
+        if (totalPalavras == 0) return 0;
+        return (palavrasTraduzidas.get() * 100) / totalPalavras;
+    }
+    
+    public double getPalavrasPorSegundo() {
+        long tempo = System.currentTimeMillis() - tempoInicio;
+        if (tempo == 0) return 0;
+        return (palavrasTraduzidas.get() * 1000.0) / tempo;
+    }
+}
+```
+
+---
+
+## 5️⃣ **TarefaTraducao.java** - Thread que traduz um bloco
+
+```java
+package tarefa;
+
+import modelo.BlocoTexto;
+import modelo.Dicionario;
+import modelo.EstatisticasTraducao;
+import util.Config;
+
+public class TarefaTraducao implements Runnable {
+    private int id;
+    private BlocoTexto bloco;
+    private Dicionario dicionario;
+    private EstatisticasTraducao estatisticas;
+    private StringBuilder resultado;
+    private int palavrasTraduzidas;
+    private boolean concluida;
+    
+    public TarefaTraducao(int id, BlocoTexto bloco, Dicionario dicionario, 
+                          EstatisticasTraducao estatisticas) {
+        this.id = id;
+        this.bloco = bloco;
+        this.dicionario = dicionario;
+        this.estatisticas = estatisticas;
+        this.resultado = new StringBuilder();
+        this.palavrasTraduzidas = 0;
+        this.concluida = false;
+    }
+    
+    @Override
+    public void run() {
+        try {
+            System.out.println("[Thread " + id + "] 🚀 Iniciou - " + bloco);
+            
+            for (String palavra : bloco.getPalavras()) {
+                // Traduz a palavra (aqui ocorre a concorrência!)
+                String traducao = dicionario.traduzir(palavra, id);
+                resultado.append(traducao).append(" ");
+                
+                // Atualiza estatísticas
+                palavrasTraduzidas++;
+                estatisticas.incrementarPalavrasTraduzidas();
+            }
+            
+            concluida = true;
+            System.out.println("[Thread " + id + "] ✅ Concluída - " + 
+                             palavrasTraduzidas + " palavras traduzidas");
+            
+        } catch (InterruptedException e) {
+            System.out.println("[Thread " + id + "] ⚠️ Interrompida!");
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            System.err.println("[Thread " + id + "] ❌ Erro: " + e.getMessage());
+        }
+    }
+    
+    public String getResultado() {
+        return resultado.toString().trim();
+    }
+    
+    public int getProgresso() {
+        int total = bloco.getTamanho();
+        if (total == 0) return 100;
+        return (palavrasTraduzidas * 100) / total;
+    }
+    
+    public boolean estaConcluida() {
+        return concluida;
+    }
+    
+    public int getId() {
+        return id;
+    }
+    
+    public BlocoTexto getBloco() {
+        return bloco;
+    }
+}
+```
+
+---
+
+## 6️⃣ **MonitorProgresso.java** - Exibe progresso no terminal
+
+```java
+package controle;
+
+import modelo.EstatisticasTraducao;
+import tarefa.TarefaTraducao;
+import util.Config;
+
+import java.util.List;
+
+public class MonitorProgresso implements Runnable {
+    private List<TarefaTraducao> tarefas;
+    private EstatisticasTraducao estatisticas;
+    private volatile boolean ativo;
+    
+    public MonitorProgresso(List<TarefaTraducao> tarefas, EstatisticasTraducao estatisticas) {
+        this.tarefas = tarefas;
+        this.estatisticas = estatisticas;
+        this.ativo = true;
+    }
+    
+    @Override
+    public void run() {
+        try {
+            while (ativo && !todasConcluidas()) {
+                limparTela();
+                exibirProgresso();
+                Thread.sleep(Config.INTERVALO_ATUALIZACAO_MS);
+            }
+            
+            // Exibição final
+            limparTela();
+            exibirProgresso();
+            
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+    
+    private void exibirProgresso() {
+        System.out.println("╔════════════════════════════════════════════════════════════════╗");
+        System.out.println("║          TRADUTOR CONCORRENTE DE LIVROS - PROGRESSO            ║");
+        System.out.println("╚════════════════════════════════════════════════════════════════╝");
+        System.out.println();
+        
+        // Progresso geral
+        int percentualGeral = estatisticas.getPercentualCompleto();
+        String barraGeral = gerarBarra(percentualGeral, 50);
+        
+        System.out.println("📊 PROGRESSO GERAL: " + percentualGeral + "%");
+        System.out.println(barraGeral);
+        System.out.println("   Palavras: " + estatisticas.getPalavrasTraduzidas() + 
+                         "/" + estatisticas.getTotalPalavras());
+        System.out.println("   Velocidade: " + 
+                         String.format("%.1f", estatisticas.getPalavrasPorSegundo()) + 
+                         " palavras/segundo");
+        System.out.println();
+        
+        // Progresso por thread
+        System.out.println("🧵 THREADS:");
+        for (TarefaTraducao tarefa : tarefas) {
+            int progresso = tarefa.getProgresso();
+            String barra = gerarBarra(progresso, 30);
+            String status = tarefa.estaConcluida() ? "✅ CONCLUÍDA" : "⚙️  PROCESSANDO";
+            
+            System.out.println("   [Thread " + tarefa.getId() + "] " + status);
+            System.out.println("   " + barra + " " + progresso + "%");
+        }
+        
+        System.out.println();
+        System.out.println("─────────────────────────────────────────────────────────────────");
+    }
+    
+    private String gerarBarra(int percentual, int tamanho) {
+        int completo = (percentual * tamanho) / 100;
+        int incompleto = tamanho - completo;
+        
+        StringBuilder barra = new StringBuilder("[");
+        for (int i = 0; i < completo; i++) {
+            barra.append("█");
+        }
+        for (int i = 0; i < incompleto; i++) {
+            barra.append("░");
+        }
+        barra.append("]");
+        
+        return barra.toString();
+    }
+    
+    private boolean todasConcluidas() {
+        return tarefas.stream().allMatch(TarefaTraducao::estaConcluida);
+    }
+    
+    private void limparTela() {
+        // Limpa a tela (funciona na maioria dos terminais)
+        System.out.print("\033[H\033[2J");
+        System.out.flush();
+    }
+    
+    public void parar() {
+        ativo = false;
+    }
+}
+```
+
+---
+
+## 7️⃣ **LeitorArquivo.java** - Lê e escreve arquivos
+
+```java
+package util;
+
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+
+public class LeitorArquivo {
+    
+    public static String lerTextoCompleto(String caminhoArquivo) throws IOException {
+        StringBuilder conteudo = new StringBuilder();
+        
+        try (BufferedReader br = new BufferedReader(
+                new InputStreamReader(
+                    new FileInputStream(caminhoArquivo), 
+                    StandardCharsets.UTF_8))) {
+            
+            String linha;
+            while ((linha = br.readLine()) != null) {
+                conteudo.append(linha).append(" ");
+            }
+        }
+        
+        return conteudo.toString().trim();
+    }
+    
+    public static void escreverTexto(String caminhoArquivo, String texto) throws IOException {
+        // Cria diretórios se não existirem
+        File arquivo = new File(caminhoArquivo);
+        arquivo.getParentFile().mkdirs();
+        
+        try (BufferedWriter bw = new BufferedWriter(
+                new OutputStreamWriter(
+                    new FileOutputStream(caminhoArquivo), 
+                    StandardCharsets.UTF_8))) {
+            
+            bw.write(texto);
+        }
+    }
+    
+    public static int contarPalavras(String texto) {
+        if (texto == null || texto.trim().isEmpty()) {
+            return 0;
+        }
+        return texto.trim().split("\\s+").length;
+    }
+}
+```
+
+---
+
+## 8️⃣ **GerenciadorTraducao.java** - Orquestra todo o processo
+
+```java
+package controle;
+
+import modelo.BlocoTexto;
+import modelo.Dicionario;
+import modelo.EstatisticasTraducao;
+import tarefa.TarefaTraducao;
+import util.Config;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
+public class GerenciadorTraducao {
+    private Dicionario dicionario;
+    private int numThreads;
+    
+    public GerenciadorTraducao() {
+        this.numThreads = Config.NUM_THREADS;
+        this.dicionario = new Dicionario(Config.PERMISSOES_DICIONARIO);
+    }
+    
+    public String traduzir(String textoCompleto) throws InterruptedException {
+        // 1. Prepara estatísticas
+        String[] palavras = textoCompleto.split("\\s+");
+        EstatisticasTraducao estatisticas = new EstatisticasTraducao(palavras.length);
+        
+        System.out.println("\n╔════════════════════════════════════════════════════════════════╗");
+        System.out.println("║              INICIANDO TRADUÇÃO CONCORRENTE                    ║");
+        System.out.println("╚════════════════════════════════════════════════════════════════╝");
+        System.out.println("📖 Total de palavras: " + palavras.length);
+        System.out.println("🧵 Número de threads: " + numThreads);
+        System.out.println("🔒 Acessos simultâneos ao dicionário: " + Config.PERMISSOES_DICIONARIO);
+        System.out.println("📚 Tamanho do dicionário: " + dicionario.getTamanhoDicionario() + " palavras");
+        System.out.println();
+        
+        // 2. Divide em blocos
+        List<BlocoTexto> blocos = dividirEmBlocos(palavras);
+        
+        // 3. Cria as tarefas
+        List<TarefaTraducao> tarefas = new ArrayList<>();
+        for (int i = 0; i < numThreads && i < blocos.size(); i++) {
+            tarefas.add(new TarefaTraducao(i + 1, blocos.get(i), dicionario, estatisticas));
+        }
+        
+        // 4. Inicia o monitor de progresso
+        MonitorProgresso monitor = new MonitorProgresso(tarefas, estatisticas);
+        Thread threadMonitor = new Thread(monitor);
+        threadMonitor.start();
+        
+        // 5. Inicia as threads de tradução
+        List<Thread> threads = new ArrayList<>();
+        for (TarefaTraducao tarefa : tarefas) {
+            Thread thread = new Thread(tarefa);
+            threads.add(thread);
+            thread.start();
+        }
+        
+        // 6. Aguarda todas terminarem
+        for (Thread thread : threads) {
+            thread.join();
+        }
+        
+        // 7. Para o monitor
+        monitor.parar();
+        threadMonitor.join();
+        
+        // 8. Finaliza estatísticas
+        estatisticas.finalizarContagem();
+        
+        // 9. Junta os resultados
+        String resultado = juntarResultados(tarefas);
+        
+        // 10. Exibe estatísticas finais
+        exibirEstatisticasFinais(estatisticas);
+        
+        return resultado;
+    }
+    
+    private List<BlocoTexto> dividirEmBlocos(String[] palavras) {
+        List<BlocoTexto> blocos = new ArrayList<>();
+        int palavrasPorBloco = (int) Math.ceil((double) palavras.length / numThreads);
+        
+        for (int i = 0; i < numThreads; i++) {
+            int inicio = i * palavrasPorBloco;
+            int fim = Math.min(inicio + palavrasPorBloco, palavras.length);
+            
+            if (inicio < palavras.length) {
+                List<String> palavrasBloco = Arrays.asList(
+                    Arrays.copyOfRange(palavras, inicio, fim)
+                );
+                blocos.add(new BlocoTexto(i, palavrasBloco, inicio));
+            }
+        }
+        
+        return blocos;
+    }
+    
+    private String juntarResultados(List<TarefaTraducao> tarefas) {
+        StringBuilder textoCompleto = new StringBuilder();
+        
+        for (TarefaTraducao tarefa : tarefas) {
+            textoCompleto.append(tarefa.getResultado()).append(" ");
+        }
+        
+        return textoCompleto.toString().trim();
+    }
+    
+    private void exibirEstatisticasFinais(EstatisticasTraducao estatisticas) {
+        System.out.println("\n╔════════════════════════════════════════════════════════════════╗");
+        System.out.println("║              TRADUÇÃO CONCLUÍDA COM SUCESSO                    ║");
+        System.out.println("╚════════════════════════════════════════════════════════════════╝");
+        System.out.println("✅ Palavras traduzidas: " + estatisticas.getPalavrasTraduzidas());
+        System.out.println("⏱️  Tempo total: " + 
+                         String.format("%.2f", estatisticas.getTempoTotalSegundos()) + " segundos");
+        System.out.println("⚡ Velocidade média: " + 
+                         String.format("%.1f", estatisticas.getPalavrasPorSegundo()) + 
+                         " palavras/segundo");
+        System.out.println("🔍 Total de acessos ao dicionário: " + dicionario.getTotalAcessos());
+        System.out.println("⏳ Vezes que threads precisaram esperar: " + dicionario.getTotalEsperas());
+        System.out.println();
+    }
+}
+```
+
+---
+
+## 9️⃣ **Main.java** - Ponto de entrada
+
+```java
+import controle.GerenciadorTraducao;
+import util.Config;
+import util.LeitorArquivo;
+
+public class Main {
+    public static void main(String[] args) {
+        try {
+            exibirBanner();
+            
+            // 1. Lê o livro de entrada
+            System.out.println("📂 Lendo arquivo: " + Config.CAMINHO_LIVRO_ENTRADA);
+            String textoOriginal = LeitorArquivo.lerTextoCompleto(Config.CAMINHO_LIVRO_ENTRADA);
+            int numPalavras = LeitorArquivo.contarPalavras(textoOriginal);
+            
+            System.out.println("✓ Arquivo carregado: " + numPalavras + " palavras");
+            
+            // 2. Cria o gerenciador e traduz
+            GerenciadorTraducao gerenciador = new GerenciadorTraducao();
+            String textoTraduzido = gerenciador.traduzir(textoOriginal);
+            
+            // 3. Salva o resultado
+            System.out.println("💾 Salvando tradução em: " + Config.CAMINHO_LIVRO_SAIDA);
+            LeitorArquivo.escreverTexto(Config.CAMINHO_LIVRO_SAIDA, textoTraduzido);
+            System.out.println("✓ Arquivo salvo com sucesso!");
+            
+            System.out.println("\n🎉 Processo concluído!");
+            
+        } catch (Exception e) {
+            System.err.println("\n❌ ERRO: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+    
+    private static void exibirBanner() {
+        System.out.println("╔═══════════════════════════════════════════════════════════════════╗");
+        System.out.println("║                                                                   ║");
+        System.out.println("║        TRADUTOR CONCORRENTE DE LIVROS EM JAVA                     ║");
+        System.out.println("║        Paradigmas de Programação - SENAI/PE                       ║");
+        System.out.println("║                                                                   ║");
+        System.out.println("╚═══════════════════════════════════════════════════════════════════╝");
+        System.out.println();
+    }
+}
+```
+
+---
+
+## 📝 Arquivos de Recursos
+
+### **dicionario.txt**
+```
+# Dicionário Português-Inglês
+# Formato: palavra_pt;palavra_en
+
+# Artigos
+o;the
+a;the
+os;the
+as;the
+um;a
+uma;a
+uns;some
+umas;some
+
+# Verbos comuns
+era;was
+foram;were
+tinha;had
+morava;lived
+vivia;lived
+estava;was
+foram;went
+disse;said
+fez;made
+
+# Substantivos
+cachorro;dog
+gato;cat
+casa;house
+livro;book
+tempo;time
+vez;time
+dia;day
+noite;night
+homem;man
+mulher;woman
+criança;child
+cidade;city
+mundo;world
+vida;life
+amor;love
+
+# Adjetivos
+grande;big
+pequeno;small
+bonito;beautiful
+feio;ugly
+feliz;happy
+triste;sad
+bom;good
+mau;bad
+
+# Outros
+e;and
+mas;but
+ou;or
+não;not
+sim;yes
+muito;very
+pouco;little
+sempre;always
+nunca;never
+```
+
+### **livro_entrada.txt** (exemplo)
+```
+Era uma vez um cachorro que morava em uma casa grande. 
+O cachorro tinha um amigo gato que visitava todos os dias. 
+Eles gostavam de brincar no jardim e comer comida juntos.
+A casa tinha um jardim bonito com muitas flores e árvores.
+O cachorro e o gato eram muito felizes naquela casa.
+Um dia o homem da casa disse que eles iriam viajar para uma cidade nova.
+O cachorro e o gato ficaram felizes com a notícia.
+A vida na cidade foi boa para os dois amigos.
+```
+
+---
+
+## 🚀 Como Compilar e Executar
+
+```bash
+# 1. Compilar
+javac -d bin src/**/*.java src/*.java
+
+# 2. Executar
+java -cp bin Main
+
+# Ou tudo de uma vez:
+javac -d bin src/**/*.java src/*.java && java -cp bin Main
+```
+
+---
+
+## 📊 Saída Esperada no Terminal
+
+```
+╔═══════════════════════════════════════════════════════════════════╗
+║                                                                   ║
+║        TRADUTOR CONCORRENTE DE LIVROS EM JAVA                     ║
+║        Paradigmas de Programação - SENAI/PE                       ║
+║                                                                   ║
+╚═══════════════════════════════════════════════════════════════════╝
+
+📂 Lendo arquivo: recursos/livro_entrada.txt
+[DICIONÁRIO] Carregado com 45 palavras
+✓ Arquivo carregado: 89 palavras
+
+╔════════════════════════════════════════════════════════════════╗
+║              INICIANDO TRADUÇÃO CONCORRENTE                    ║
+╚════════════════════════════════════════════════════════════════╝
+📖 Total de palavras: 89
+🧵 Número de threads: 4
+🔒 Acessos simultâneos ao dicionário: 2
+📚 Tamanho do dicionário: 45 palavras
+
+[Thread 1] 🚀 Iniciou - Bloco 0 [23 palavras]
+[Thread 2] 🚀 Iniciou - Bloco 1 [23 palavras]
+[Thread 3] 🚀 Iniciou - Bloco 2 [23 palavras]
+[Thread 4] 🚀 Iniciou - Bloco 3 [20 palavras]
+
+╔════════════════════════════════════════════════════════════════╗
+║          TRADUTOR CONCORRENTE DE LIVROS - PROGRESSO            ║
+╚════════════════════════════════════════════════════════════════╝
+
+📊 PROGRESSO GERAL: 67%
+[█████████████████████████████████░░░░░░░░░░░░░░░░░]
+   Palavras: 60/89
+   Velocidade: 12.3 palavras/segundo
+
+🧵 THREADS:
+   [Thread 1] ✅ CONCLUÍDA
+   [██████████████████████████████] 100%
+   [Thread 2] ⚙️  PROCESSANDO
+   [████████████████████░░░░░░░░░░] 65%
+   [Thread 3] ⚙️  PROCESSANDO
+   [███████████████████░░░░░░░░░░░] 61%
+   [Thread 4] ⚙️  PROCESSANDO
+   [██████████████████████░░░░░░░░] 75%
+
+─────────────────────────────────────────────────────────────────
+
+[Thread 1] ✅ Concluída - 23 palavras traduzidas
+[Thread 4] ✅ Concluída - 20 palavras traduzidas
+[Thread 2] ✅ Concluída - 23 palavras traduzidas
+[Thread 3] ✅ Concluída - 23 palavras traduzidas
+
+╔════════════════════════════════════════════════════════════════╗
+║              TRADUÇÃO CONCLUÍDA COM SUCESSO                    ║
+╚════════════════════════════════════════════════════════════════╝
+✅ Palavras traduzidas: 89
+⏱️  Tempo total: 3.47 segundos
+⚡ Velocidade média: 25.6 palavras/segundo
+🔍 Total de acessos ao dicionário: 89
+⏳ Vezes que threads precisaram esperar: 34
+
+💾 Salvando tradução em: saida/livro_traduzido.txt
+✓ Arquivo salvo com sucesso!
+
+🎉 Processo concluído!
+```
+
+---
+
+## ✅ Checklist de Requisitos
+
+| Requisito | Status | Onde está |
+|-----------|--------|-----------|
+| ✅ Tema aprovado | Pendente | Enviar para Sidney |
+| ✅ Código em português | ✓ | Todas as classes |
+| ✅ Múltiplas threads | ✓ | `TarefaTraducao` |
+| ✅ Semáforo | ✓ | `Dicionario.java` |
+| ✅ Configurável | ✓ | `Config.java` |
+| ✅ Interface terminal | ✓ | `MonitorProgresso.java` |
+| ✅ Propriedades | ✓ | Liveness, No starvation |
+| ✅ Testes documentados | Pendente | Fazer testes |
+| ✅ Código existente? | Não | Tudo original |
+| ✅ IA Generativa | Sim | Documentar uso |
+
+---
+
+## 🎯 Resumo
+
+**Total de classes:** 9
+**Linhas de código:** ~600
+**Tempo para implementar:** 2-3 dias
+**Dificuldade:** Média
+
+**Destaques:**
+- ✅ Terminal puro (sem JavaFX)
+- ✅ Barra de progresso animada
+- ✅ Estatísticas em tempo real
+- ✅ Concorrência real e visível
+- ✅ Código limpo e organizado
+
+Quer que eu detalhe alguma classe específica ou te ajude com os testes? 🚀
