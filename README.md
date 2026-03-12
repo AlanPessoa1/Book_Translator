@@ -1,4 +1,4 @@
-# Book_Tranlator
+# Book_Translator
 # Concurrent Book Translator (Java)
 
 A CLI application that translates a text file using multiple threads.  
